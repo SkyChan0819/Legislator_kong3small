@@ -102,6 +102,25 @@ def run_query(bill_name, bill_urls, legislator_filter=""):
     3. 依照公報索引的會次專屬名單進行過濾
     """
     all_speeches = []
+    seen_speeches = set()
+
+    def add_speech(speech, source_url):
+        speech["source_url"] = source_url
+        key = (
+            speech.get("speech_record_url")
+            or speech.get("speech_id")
+            or (
+                speech.get("legislator_name", ""),
+                speech.get("meeting_time", ""),
+                speech.get("speech_time", ""),
+                speech.get("meeting_name", ""),
+            )
+        )
+        if key in seen_speeches:
+            return False
+        seen_speeches.add(key)
+        all_speeches.append(speech)
+        return True
 
     for url in bill_urls:
         with st.status(f"📄 解析議案：{url}", expanded=True) as status:
@@ -209,6 +228,25 @@ def run_query_api_first(bill_name, bill_urls, legislator_filter="", meeting_scop
     4. Reuse the existing dataframe/export/transcript flow.
     """
     all_speeches = []
+    seen_speeches = set()
+
+    def add_speech(speech, source_url):
+        speech["source_url"] = source_url
+        key = (
+            speech.get("speech_record_url")
+            or speech.get("speech_id")
+            or (
+                speech.get("legislator_name", ""),
+                speech.get("meeting_time", ""),
+                speech.get("speech_time", ""),
+                speech.get("meeting_name", ""),
+            )
+        )
+        if key in seen_speeches:
+            return False
+        seen_speeches.add(key)
+        all_speeches.append(speech)
+        return True
 
     for url in bill_urls:
         with st.status(f"解析議案：{url}", expanded=True) as status:
@@ -243,10 +281,11 @@ def run_query_api_first(bill_name, bill_urls, legislator_filter="", meeting_scop
                         committee_names=bill_info.get("ivod_committees", []),
                     )
                     date_speeches = date_result.get("speeches", [])
-                    st.write(f"日期查詢取得 {len(date_speeches)} 筆發言。")
+                    added = 0
                     for speech in date_speeches:
-                        speech["source_url"] = url
-                        all_speeches.append(speech)
+                        if add_speech(speech, url):
+                            added += 1
+                    st.write(f"日期查詢取得 {len(date_speeches)} 筆，新增 {added} 筆。")
                     date_query_done = True
 
                 st.write(f"搜尋第 {term} 屆第 {session} 會期第 {times} 次會議的公報索引 PDF...")
@@ -282,11 +321,11 @@ def run_query_api_first(bill_name, bill_urls, legislator_filter="", meeting_scop
                     meeting_scopes=meeting_scopes,
                 )
                 speeches = api_result.get("speeches", [])
-                st.write(f"ID421 API 回傳 {len(speeches)} 筆發言。")
-
+                added = 0
                 for speech in speeches:
-                    speech["source_url"] = url
-                    all_speeches.append(speech)
+                    if add_speech(speech, url):
+                        added += 1
+                st.write(f"ID421 API 回傳 {len(speeches)} 筆，新增 {added} 筆。")
 
                 time.sleep(0.2)
 

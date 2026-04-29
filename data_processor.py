@@ -46,7 +46,10 @@ class DataProcessor:
         df = pd.DataFrame(rows)
         # 去重
         if not df.empty:
-            df = df.drop_duplicates(subset=['委員姓名', '發言起始', '會議日期'])
+            if 'speechRecordUrl' in df.columns and df['speechRecordUrl'].astype(bool).any():
+                df = df.drop_duplicates(subset=['speechRecordUrl'])
+            else:
+                df = df.drop_duplicates(subset=['委員姓名', '發言起始', '會議日期'])
         return df
 
     def build_dataframe_from_ivod(self, ivod_speeches, bill_short_name="", bill_url=""):
@@ -76,7 +79,10 @@ class DataProcessor:
         
         df = pd.DataFrame(rows)
         if not df.empty:
-            df = df.drop_duplicates(subset=['委員姓名', '發言起始', '會議日期'])
+            if 'speechRecordUrl' in df.columns and df['speechRecordUrl'].astype(bool).any():
+                df = df.drop_duplicates(subset=['speechRecordUrl'])
+            else:
+                df = df.drop_duplicates(subset=['委員姓名', '發言起始', '會議日期'])
         return df
 
     def filter_by_legislator(self, df, legislator_name):
