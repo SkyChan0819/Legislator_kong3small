@@ -25,7 +25,7 @@ st.markdown("""
 # 初始化
 # ============================================================
 @st.cache_resource
-def get_client(_client_version="2026-04-30-id421-timeout-guard"):
+def get_client(_client_version="2026-04-30-gazette-only-mode"):
     return LYApiClient()
 
 ly_client = get_client()
@@ -71,6 +71,7 @@ with st.container(border=True):
             meeting_scopes_preset.append("委員會")
         if include_plenary:
             meeting_scopes_preset.append("院會")
+        gazette_only_preset = st.checkbox("僅使用公報發言名單", value=True, key="gazette_only_preset")
         search_preset = st.button("🚀 開始查詢", use_container_width=True, type="primary", key="btn_preset")
 
     with tab_custom:
@@ -89,6 +90,7 @@ with st.container(border=True):
             meeting_scopes_custom.append("委員會")
         if include_plenary_custom:
             meeting_scopes_custom.append("院會")
+        gazette_only_custom = st.checkbox("僅使用公報發言名單", value=True, key="gazette_only_custom")
         search_custom = st.button("🚀 開始查詢", use_container_width=True, type="primary", key="btn_custom")
 
 # ============================================================
@@ -219,7 +221,7 @@ def run_query(bill_name, bill_urls, legislator_filter=""):
 
 
 # 處理查詢
-def run_query_api_first(bill_name, bill_urls, legislator_filter="", meeting_scopes=None):
+def run_query_api_first(bill_name, bill_urls, legislator_filter="", meeting_scopes=None, gazette_only=False):
     """
     API-first retrieval flow:
     1. Parse the PPG bill page for gazette session tuples.
@@ -269,6 +271,10 @@ def run_query_api_first(bill_name, bill_urls, legislator_filter="", meeting_scop
                 term = query["term"]
                 session = query["sessionPeriod"]
                 times = query["sessionTimes"]
+
+                if gazette_only and bill_info.get("meeting_dates") and not date_query_done:
+                    st.write("已啟用公報名單模式，跳過日期寬鬆查詢。")
+                    date_query_done = True
 
                 if bill_info.get("meeting_dates") and not date_query_done:
                     st.write("使用法案頁的會議日期直接查 ID421 API...")
@@ -350,6 +356,7 @@ if search_preset:
             selected_bill['urls'],
             legislator_filter,
             meeting_scopes=meeting_scopes_preset,
+            gazette_only=gazette_only_preset,
         )
     st.session_state.result_df = df
     st.session_state.current_bill = selected_bill['name']
@@ -366,6 +373,7 @@ if search_custom and custom_url:
             urls,
             legislator_filter_custom,
             meeting_scopes=meeting_scopes_custom,
+            gazette_only=gazette_only_custom,
         )
     st.session_state.result_df = df
     st.session_state.current_bill = name
