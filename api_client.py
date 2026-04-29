@@ -393,12 +393,21 @@ class LYApiClient:
         headers = self.session.headers.copy()
         headers["Accept-Encoding"] = "identity"
 
-        response = requests.get(api_url, params=params, headers=headers, timeout=60, verify=False)
+        try:
+            response = self._get(api_url, params=params, headers=headers, timeout=(8, 30))
+        except requests.RequestException as e:
+            print(f"ID421 API timeout/error: {e}")
+            return []
+
         if response.status_code != 200 or len(response.content) < 20:
             return []
 
-        content = response.content.decode('utf-8-sig')
-        return list(csv.DictReader(io.StringIO(content)))
+        try:
+            content = response.content.decode('utf-8-sig')
+            return list(csv.DictReader(io.StringIO(content)))
+        except Exception as e:
+            print(f"ID421 CSV parse error: {e}")
+            return []
 
     def fetch_speeches_by_session_speakers(self, term, session_period, session_times, speakers, meeting_dates=None, bill_keywords=None, meeting_scopes=None):
         """

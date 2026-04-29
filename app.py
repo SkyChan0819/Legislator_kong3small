@@ -25,7 +25,7 @@ st.markdown("""
 # 初始化
 # ============================================================
 @st.cache_resource
-def get_client(_client_version="2026-04-30-ppg-retry"):
+def get_client(_client_version="2026-04-30-id421-timeout-guard"):
     return LYApiClient()
 
 ly_client = get_client()
