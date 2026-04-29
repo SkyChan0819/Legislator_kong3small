@@ -7,6 +7,11 @@ import pdfplumber
 from bs4 import BeautifulSoup
 from datetime import datetime
 import csv
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
+import urllib3
+
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 class LYApiClient:
     """立法院資料串接客戶端 - 結合 Open Data API (ID:148) 與 PPG/IVOD 網頁爬蟲"""
@@ -15,9 +20,31 @@ class LYApiClient:
         self.session = requests.Session()
         self.session.headers.update({
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-            "Accept-Encoding": "identity"
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,application/json;q=0.8,*/*;q=0.7",
+            "Accept-Language": "zh-TW,zh;q=0.9,en;q=0.8",
+            "Accept-Encoding": "identity",
+            "Connection": "close",
         })
+        retry = Retry(
+            total=4,
+            connect=4,
+            read=3,
+            status=3,
+            backoff_factor=1,
+            status_forcelist=(429, 500, 502, 503, 504),
+            allowed_methods=frozenset(["GET"]),
+            raise_on_status=False,
+        )
+        adapter = HTTPAdapter(max_retries=retry, pool_connections=10, pool_maxsize=10)
+        self.session.mount("https://", adapter)
+        self.session.mount("http://", adapter)
+        self.session.verify = False
         self.api_base = "https://data.ly.gov.tw/odw/openDatasetJson.action"
+
+    def _get(self, url, **kwargs):
+        kwargs.setdefault("timeout", (10, 60))
+        kwargs.setdefault("verify", False)
+        return self.session.get(url, **kwargs)
 
     # ================================================================
     # 1. Open Data API (ID: 148) - 委員發言片段相關影片資訊
@@ -49,7 +76,7 @@ class LYApiClient:
                     "selectTerm": "all",
                     "page": page
                 }
-                response = self.session.get(self.api_base, params=params, timeout=30)
+                response = self._get(self.api_base, params=params, timeout=(10, 30))
                 response.raise_for_status()
                 data = response.json()
                 
@@ -98,7 +125,7 @@ class LYApiClient:
         - 相關會議日期列表 (meeting_dates)
         """
         try:
-            response = self.session.get(ppg_url, timeout=15)
+            response = self._get(ppg_url, timeout=(10, 60))
             response.raise_for_status()
             soup = BeautifulSoup(response.text, 'html.parser')
             
@@ -578,7 +605,7 @@ class LYApiClient:
 
         try:
             # 先抓第一頁，同時取得總筆數
-            response = self.session.get(ivod_newsclip_url, timeout=15)
+            response = self._get(ivod_newsclip_url, timeout=(10, 30))
             response.raise_for_status()
             soup = BeautifulSoup(response.text, 'html.parser')
 
@@ -603,7 +630,7 @@ class LYApiClient:
                 for pg in range(2, total_pages + 1):
                     try:
                         paged_url = f"{ivod_newsclip_url}&page={pg}"
-                        r = self.session.get(paged_url, timeout=15)
+                        r = self._get(paged_url, timeout=(10, 30))
                         r.raise_for_status()
                         pg_soup = BeautifulSoup(r.text, 'html.parser')
                         pg_speeches = parse_page(pg_soup)
@@ -640,7 +667,7 @@ class LYApiClient:
             url = f"https://ivod.ly.gov.tw/Demand/Speech/{speech_id_or_url}"
         
         try:
-            response = self.session.get(url, timeout=10)
+            response = self._get(url, timeout=(10, 30))
             response.raise_for_status()
             response.encoding = 'utf-8'
             
@@ -729,7 +756,7 @@ class LYApiClient:
         url = f"https://ppg.ly.gov.tw/ppg/api/v1/publication?size=10&page=1&sortCode=01&publicationType=7&term={term}&sessionPeriod={session_period}&sessionTimes={session_times}&queryType=0"
         pdf_urls = []
         try:
-            response = self.session.get(url, timeout=10)
+            response = self._get(url, timeout=(10, 30))
             response.raise_for_status()
             data = response.json()
             for item in data.get("items", []):
@@ -747,7 +774,7 @@ class LYApiClient:
         """
         speakers = set()
         try:
-            response = self.session.get(pdf_url, timeout=15)
+            response = self._get(pdf_url, timeout=(10, 60))
             response.raise_for_status()
             
             with pdfplumber.open(io.BytesIO(response.content)) as pdf:
