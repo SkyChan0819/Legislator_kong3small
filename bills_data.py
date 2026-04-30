@@ -6,7 +6,7 @@ BILLS = [
     {
         "name": "《立法院職權行使法》部分條文",
         "session": "第11屆第1會期第15次",
-        "urls": ["https://ppg.ly.gov.tw/ppg/bills/603110035400000/details"]
+        "urls": ["https://ppg.ly.gov.tw/ppg/bills/202110013220000/details"]
     },
     {
         "name": "《中華民國刑法》第五章之一章名及第141條之1",
