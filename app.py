@@ -71,7 +71,8 @@ with st.container(border=True):
             meeting_scopes_preset.append("委員會")
         if include_plenary:
             meeting_scopes_preset.append("院會")
-        gazette_only_preset = st.checkbox("僅使用公報發言名單", value=True, key="gazette_only_preset")
+        gazette_only_preset = st.checkbox("委員會也僅使用公報發言名單", value=False, key="gazette_only_preset")
+        st.caption("院會一律只輸出公報發言索引中有名字的立委；委員會預設抓整場發言。")
         search_preset = st.button("🚀 開始查詢", use_container_width=True, type="primary", key="btn_preset")
 
     with tab_custom:
@@ -90,7 +91,8 @@ with st.container(border=True):
             meeting_scopes_custom.append("委員會")
         if include_plenary_custom:
             meeting_scopes_custom.append("院會")
-        gazette_only_custom = st.checkbox("僅使用公報發言名單", value=True, key="gazette_only_custom")
+        gazette_only_custom = st.checkbox("委員會也僅使用公報發言名單", value=False, key="gazette_only_custom")
+        st.caption("院會一律只輸出公報發言索引中有名字的立委；委員會預設抓整場發言。")
         search_custom = st.button("🚀 開始查詢", use_container_width=True, type="primary", key="btn_custom")
 
 # ============================================================
@@ -257,6 +259,11 @@ def run_query_api_first(bill_name, bill_urls, legislator_filter="", meeting_scop
             actual_bill_name = bill_info.get('title') or bill_name
             bill_keywords = ly_client.extract_bill_keywords(actual_bill_name)
             gazette_queries = bill_info.get("gazette_queries", [])
+            selected_scopes = set(meeting_scopes or [])
+            date_query_scopes = []
+            if "委員會" in selected_scopes and not gazette_only:
+                date_query_scopes.append("委員會")
+            plenary_query_scopes = ["院會"] if "院會" in selected_scopes else []
 
             st.write(f"法案：{actual_bill_name[:60]}...")
             st.write(f"屆次會期候選：{len(gazette_queries)} 筆")
@@ -272,18 +279,18 @@ def run_query_api_first(bill_name, bill_urls, legislator_filter="", meeting_scop
                 session = query["sessionPeriod"]
                 times = query["sessionTimes"]
 
-                if gazette_only and bill_info.get("meeting_dates") and not date_query_done:
+                if not date_query_scopes and bill_info.get("meeting_dates") and not date_query_done:
                     st.write("已啟用公報名單模式，跳過日期寬鬆查詢。")
                     date_query_done = True
 
-                if bill_info.get("meeting_dates") and not date_query_done:
+                if bill_info.get("meeting_dates") and date_query_scopes and not date_query_done:
                     st.write("使用法案頁的會議日期直接查 ID421 API...")
                     date_result = ly_client.fetch_speeches_by_dates(
                         term,
                         session,
                         bill_info.get("meeting_dates", []),
                         bill_keywords=bill_keywords,
-                        meeting_scopes=meeting_scopes,
+                        meeting_scopes=date_query_scopes,
                         committee_names=bill_info.get("ivod_committees", []),
                     )
                     date_speeches = date_result.get("speeches", [])
@@ -293,6 +300,9 @@ def run_query_api_first(bill_name, bill_urls, legislator_filter="", meeting_scop
                             added += 1
                     st.write(f"日期查詢取得 {len(date_speeches)} 筆，新增 {added} 筆。")
                     date_query_done = True
+
+                if not plenary_query_scopes:
+                    continue
 
                 st.write(f"搜尋第 {term} 屆第 {session} 會期第 {times} 次會議的公報索引 PDF...")
                 pdf_urls = ly_client.fetch_gazette_index_pdfs(term, session, times)
@@ -324,7 +334,7 @@ def run_query_api_first(bill_name, bill_urls, legislator_filter="", meeting_scop
                     session_speakers,
                     meeting_dates=bill_info.get("meeting_dates", []),
                     bill_keywords=bill_keywords,
-                    meeting_scopes=meeting_scopes,
+                    meeting_scopes=plenary_query_scopes,
                 )
                 speeches = api_result.get("speeches", [])
                 added = 0
