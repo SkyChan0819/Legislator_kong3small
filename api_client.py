@@ -844,3 +844,254 @@ class LYApiClient:
             print(f"Error parsing PDF {pdf_url}: {e}")
             
         return list(speakers)
+
+    def fetch_gazette_index_pdfs(self, term, session_period, session_times):
+        """
+        Fetch gazette index PDFs for a specific plenary meeting.
+
+        The PPG publicationType=7 API is the normal source, but some recent
+        plenary indexes are only exposed through PublicationBulletinDetail.
+        In that case, derive the BulletinDetail PDF path from official gazette
+        attachments and probe likely file numbers.
+        """
+        pdf_urls = []
+        api_url = (
+            "https://ppg.ly.gov.tw/ppg/api/v1/publication"
+            f"?size=10&page=1&sortCode=01&publicationType=7"
+            f"&term={term}&sessionPeriod={session_period}"
+            f"&sessionTimes={session_times}&queryType=0"
+        )
+        try:
+            response = self._get(api_url, timeout=(10, 30))
+            response.raise_for_status()
+            data = response.json()
+            for item in data.get("items", []):
+                for attachment in item.get("attachments", []):
+                    if attachment.get("attachmentType") == "PDF" and attachment.get("link"):
+                        pdf_urls.append(attachment["link"])
+        except Exception as e:
+            print(f"Error fetching gazette API: {e}")
+
+        if pdf_urls:
+            return list(dict.fromkeys(pdf_urls))
+
+        return self._fetch_bulletin_detail_index_pdfs(term, session_period, session_times)
+
+    def _fetch_bulletin_detail_index_pdfs(self, term, session_period, session_times):
+        """Fallback for plenary gazette indexes not listed as publicationType=7."""
+        publication_url = (
+            "https://ppg.ly.gov.tw/ppg/api/v1/publication"
+            f"?size=50&page=1&sortCode=01&publicationType=1"
+            f"&term={term}&sessionPeriod={session_period}"
+            f"&sessionTimes={session_times}&queryType=0"
+        )
+        templates = []
+        detail_pages = []
+        try:
+            response = self._get(publication_url, timeout=(10, 30))
+            response.raise_for_status()
+            data = response.json()
+            for item in data.get("items", []):
+                for attachment in item.get("attachments", []):
+                    link = attachment.get("link") or ""
+                    match = re.search(r"/pdf/(\d+)/(\d+)/(LCIDC\d+_\d+_)\d+\.pdf", link)
+                    if match:
+                        year, issue, prefix = match.groups()
+                        volume_match = re.search(r"_(\d{3})(\d{2})(\d{2})_", prefix)
+                        if volume_match:
+                            detail_year, detail_issue, detail_part = volume_match.groups()
+                            detail_url = (
+                                "https://ppg.ly.gov.tw/ppg/publications/"
+                                f"official-gazettes/{detail_year}/{detail_issue}/{detail_part}/details"
+                            )
+                            if detail_url not in detail_pages:
+                                detail_pages.append(detail_url)
+                        template = (
+                            "https://ppg.ly.gov.tw/ppg/PublicationBulletinDetail/"
+                            f"download/communique1/final/pdf/{year}/{issue}/{prefix}" + "{num:05d}.pdf"
+                        )
+                        if template not in templates:
+                            templates.append(template)
+        except Exception as e:
+            print(f"Error fetching official gazette API for fallback: {e}")
+            return []
+
+        detail_page_urls = self._fetch_index_pdfs_from_detail_pages(detail_pages)
+        if detail_page_urls:
+            return detail_page_urls
+
+        index_urls = []
+        for template in templates:
+            for number in range(1, 41):
+                candidate = template.format(num=number)
+                try:
+                    response = self._get(candidate, timeout=(5, 20))
+                    if response.status_code != 200 or not response.content.startswith(b"%PDF"):
+                        continue
+                    if self._pdf_looks_like_speaker_index(response.content):
+                        index_urls.append(candidate)
+                except Exception:
+                    continue
+
+        return list(dict.fromkeys(index_urls))
+
+    def _fetch_index_pdfs_from_detail_pages(self, detail_pages):
+        index_urls = []
+        for detail_url in detail_pages:
+            try:
+                response = self._get(detail_url, timeout=(10, 30))
+                response.raise_for_status()
+                soup = BeautifulSoup(response.text, "html.parser")
+                pdf_links = []
+                for anchor in soup.find_all("a"):
+                    href = anchor.get("href") or ""
+                    label = anchor.get_text(" ", strip=True)
+                    if label == "PDF" and "PublicationBulletinDetail/download" in href:
+                        pdf_links.append(href)
+                for candidate in reversed(pdf_links[-3:]):
+                    pdf_response = self._get(candidate, timeout=(10, 30))
+                    if (
+                        pdf_response.status_code == 200
+                        and pdf_response.content.startswith(b"%PDF")
+                        and self._pdf_looks_like_speaker_index(pdf_response.content)
+                    ):
+                        index_urls.append(candidate)
+                        break
+            except Exception as e:
+                print(f"Error fetching gazette detail page fallback {detail_url}: {e}")
+        return list(dict.fromkeys(index_urls))
+
+    @staticmethod
+    def _pdf_looks_like_speaker_index(pdf_bytes):
+        try:
+            with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
+                for page in pdf.pages[:2]:
+                    text = page.extract_text() or ""
+                    normalized = re.sub(r"\s+", "", text)
+                    if "發言紀錄索引" in normalized or "本期委員發言" in normalized:
+                        return True
+        except Exception:
+            return False
+        return False
+
+    def parse_gazette_pdf_for_speakers(self, pdf_url, bill_keywords):
+        """Parse a gazette speaker-index PDF and return speakers for the target bill."""
+        speakers = set()
+        keywords = [kw for kw in (bill_keywords or []) if kw]
+
+        try:
+            response = self._get(pdf_url, timeout=(10, 60))
+            response.raise_for_status()
+
+            with pdfplumber.open(io.BytesIO(response.content)) as pdf:
+                for page in pdf.pages:
+                    text = page.extract_text() or ""
+                    if not text:
+                        continue
+
+                    lines = [line.strip() for line in text.splitlines() if line.strip()]
+                    for index, line in enumerate(lines):
+                        if not self._line_matches_any_keyword(line, keywords):
+                            continue
+
+                        search_end = min(index + 10, len(lines))
+                        for speaker_index in range(index + 1, search_end):
+                            speaker_line = lines[speaker_index]
+                            compact = re.sub(r"\s+", "", speaker_line)
+                            if "發言者" not in compact:
+                                continue
+
+                            names_text = re.sub(r"發\s*言\s*者", "", speaker_line).strip(" ：:")
+                            for next_line in lines[speaker_index + 1 : min(speaker_index + 4, len(lines))]:
+                                next_compact = re.sub(r"\s+", "", next_line)
+                                if re.fullmatch(r"\d+", next_compact):
+                                    break
+                                if "發言者" in next_compact or "頁次" in next_compact:
+                                    break
+                                if self._line_matches_any_keyword(next_line, keywords):
+                                    break
+                                names_text += " " + next_line
+
+                            for name in self._extract_speaker_names(names_text):
+                                speakers.add(name)
+                            break
+        except Exception as e:
+            print(f"Error parsing PDF {pdf_url}: {e}")
+
+        return sorted(speakers)
+
+    @staticmethod
+    def _line_matches_any_keyword(line, keywords):
+        normalized_line = re.sub(r"\s+", "", line)
+        for keyword in keywords:
+            normalized_keyword = re.sub(r"\s+", "", keyword)
+            if normalized_keyword and normalized_keyword in normalized_line:
+                return True
+        return False
+
+    @staticmethod
+    def _extract_speaker_names(names_text):
+        text = re.sub(r"[（(][^）)]*[）)]", "", names_text)
+        text = re.sub(r"[、，,；;／/]", " ", text)
+        text = re.sub(r"發\s*言\s*者|主席|頁次|完成三讀", " ", text)
+        names = []
+        for token in text.split():
+            clean_name = re.sub(r"[^\u4e00-\u9fff]", "", token)
+            if 2 <= len(clean_name) <= 4 and clean_name not in {"發言者", "主席"}:
+                names.append(clean_name)
+        return names
+
+    @staticmethod
+    def _session_matches(row, term, session_period, session_times):
+        meeting_name = row.get("meetingName", "") or ""
+        row_term = row.get("term", "") or row.get("selectTerm", "")
+        row_session = row.get("sessionPeriod", "")
+
+        if row_term and str(row_term) != str(term):
+            return False
+        if row_session and str(row_session) != str(session_period):
+            return False
+
+        if meeting_name:
+            compact = re.sub(r"\s+", "", meeting_name)
+            if f"第{term}屆" not in compact or f"第{session_period}會期" not in compact:
+                return False
+            if session_times and f"第{session_times}次" not in compact:
+                return False
+
+        return True
+
+    @staticmethod
+    def _keyword_matches(row, bill_keywords):
+        if not bill_keywords:
+            return True
+        haystack = " ".join([
+            row.get("meetingContent", "") or "",
+            row.get("meetingName", "") or "",
+            row.get("meetingTypeName", "") or "",
+        ])
+        normalized_haystack = re.sub(r"\s+", "", haystack)
+        return any(
+            keyword and re.sub(r"\s+", "", keyword) in normalized_haystack
+            for keyword in bill_keywords
+        )
+
+    @staticmethod
+    def _meeting_scope_matches(row, meeting_scopes):
+        if not meeting_scopes:
+            return True
+
+        scopes = set(meeting_scopes)
+        meeting_type = row.get("meetingTypeName", "") or ""
+        meeting_name = row.get("meetingName", "") or ""
+
+        if "院會" in scopes and meeting_type == "院會":
+            return True
+
+        if "委員會" in scopes:
+            if "委員會" in meeting_type and meeting_type != "全院委員會":
+                return True
+            if "委員會" in meeting_name and meeting_type != "院會":
+                return True
+
+        return False
