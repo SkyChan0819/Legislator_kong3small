@@ -872,10 +872,8 @@ class LYApiClient:
         except Exception as e:
             print(f"Error fetching gazette API: {e}")
 
-        if pdf_urls:
-            return list(dict.fromkeys(pdf_urls))
-
-        return self._fetch_bulletin_detail_index_pdfs(term, session_period, session_times)
+        bulletin_urls = self._fetch_bulletin_detail_index_pdfs(term, session_period, session_times)
+        return list(dict.fromkeys(pdf_urls + bulletin_urls))
 
     def _fetch_bulletin_detail_index_pdfs(self, term, session_period, session_times):
         """Fallback for plenary gazette indexes not listed as publicationType=7."""
@@ -1032,6 +1030,7 @@ class LYApiClient:
     @staticmethod
     def _extract_speaker_names(names_text):
         text = re.sub(r"[（(][^）)]*[）)]", "", names_text)
+        text = re.sub(r"(?<=[\u4e00-\u9fff])\s+(?=[\u4e00-\u9fff])", "", text)
         text = re.sub(r"[、，,；;／/]", " ", text)
         text = re.sub(r"發\s*言\s*者|主席|頁次|完成三讀", " ", text)
         names = []
