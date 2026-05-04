@@ -873,7 +873,20 @@ class LYApiClient:
             print(f"Error fetching gazette API: {e}")
 
         bulletin_urls = self._fetch_bulletin_detail_index_pdfs(term, session_period, session_times)
-        return list(dict.fromkeys(pdf_urls + bulletin_urls))
+        return self._dedupe_gazette_pdf_urls(pdf_urls + bulletin_urls)
+
+    @staticmethod
+    def _dedupe_gazette_pdf_urls(pdf_urls):
+        deduped = []
+        seen = set()
+        for url in pdf_urls:
+            match = re.search(r"(LCIDC\d+_\d+_\d+\.pdf)$", url or "")
+            key = match.group(1) if match else url
+            if not key or key in seen:
+                continue
+            seen.add(key)
+            deduped.append(url)
+        return deduped
 
     def _fetch_bulletin_detail_index_pdfs(self, term, session_period, session_times):
         """Fallback for plenary gazette indexes not listed as publicationType=7."""
