@@ -31,10 +31,58 @@ def get_client(_client_version="2026-04-30-gazette-only-mode"):
 ly_client = get_client()
 processor = DataProcessor(ly_client)
 
+CACHE_TTL_SECONDS = 24 * 60 * 60
+
+
+@st.cache_data(ttl=CACHE_TTL_SECONDS, show_spinner=False)
+def cached_parse_bill_page(url):
+    return get_client().parse_bill_page(url)
+
+
+@st.cache_data(ttl=CACHE_TTL_SECONDS, show_spinner=False)
+def cached_fetch_gazette_index_pdfs(term, session_period, session_times):
+    return get_client().fetch_gazette_index_pdfs(term, session_period, session_times)
+
+
+@st.cache_data(ttl=CACHE_TTL_SECONDS, show_spinner=False)
+def cached_parse_gazette_pdf_for_speakers(pdf_url, bill_keywords):
+    return get_client().parse_gazette_pdf_for_speakers(pdf_url, list(bill_keywords))
+
+
+@st.cache_data(ttl=CACHE_TTL_SECONDS, show_spinner=False)
+def cached_fetch_speeches_by_dates(term, session_period, meeting_dates, bill_keywords, meeting_scopes, committee_names):
+    return get_client().fetch_speeches_by_dates(
+        term,
+        session_period,
+        list(meeting_dates),
+        bill_keywords=list(bill_keywords),
+        meeting_scopes=list(meeting_scopes),
+        committee_names=list(committee_names),
+    )
+
+
+@st.cache_data(ttl=CACHE_TTL_SECONDS, show_spinner=False)
+def cached_fetch_speeches_by_session_speakers(term, session_period, session_times, speakers, meeting_dates, bill_keywords, meeting_scopes):
+    return get_client().fetch_speeches_by_session_speakers(
+        term,
+        session_period,
+        session_times,
+        list(speakers),
+        meeting_dates=list(meeting_dates),
+        bill_keywords=list(bill_keywords),
+        meeting_scopes=list(meeting_scopes),
+    )
+
 if 'result_df' not in st.session_state:
     st.session_state.result_df = pd.DataFrame()
 if 'current_bill' not in st.session_state:
     st.session_state.current_bill = ""
+
+with st.sidebar:
+    st.caption("快取會保留 24 小時，重複查詢同一法案會更快。")
+    if st.button("清除檢索快取", use_container_width=True):
+        st.cache_data.clear()
+        st.success("已清除快取")
 
 # ============================================================
 # 主頁面
@@ -129,7 +177,7 @@ def run_query(bill_name, bill_urls, legislator_filter=""):
     for url in bill_urls:
         with st.status(f"📄 解析議案：{url}", expanded=True) as status:
             st.write("正在解析 PPG 議案頁面...")
-            bill_info = ly_client.parse_bill_page(url)
+            bill_info = cached_parse_bill_page(url)
             st.write(f"✅ 法案：{bill_info['title'][:60]}...")
             st.write(f"📅 相關會議日期：{', '.join(bill_info['meeting_dates'])}")
             st.write(f"📹 IVOD 連結數量：{len(bill_info['ivod_links'])}")
@@ -155,10 +203,10 @@ def run_query(bill_name, bill_urls, legislator_filter=""):
 
                     st.write(f"   → 搜尋 第{term}屆 第{session}會期 第{times}次會議 公報索引...")
 
-                    pdf_urls = ly_client.fetch_gazette_index_pdfs(term, session, times)
+                    pdf_urls = cached_fetch_gazette_index_pdfs(term, session, times)
                     session_speakers = set()
                     for pdf_url in pdf_urls:
-                        speakers = ly_client.parse_gazette_pdf_for_speakers(pdf_url, bill_keywords)
+                        speakers = cached_parse_gazette_pdf_for_speakers(pdf_url, tuple(bill_keywords))
                         session_speakers.update(speakers)
 
                     if session_speakers:
@@ -255,7 +303,7 @@ def run_query_api_first(bill_name, bill_urls, legislator_filter="", meeting_scop
     for url in bill_urls:
         with st.status(f"解析議案：{url}", expanded=True) as status:
             st.write("正在解析 PPG 議案頁面...")
-            bill_info = ly_client.parse_bill_page(url)
+            bill_info = cached_parse_bill_page(url)
             actual_bill_name = bill_info.get('title') or bill_name
             bill_keywords = ly_client.extract_bill_keywords(actual_bill_name)
             gazette_queries = bill_info.get("gazette_queries", [])
@@ -285,13 +333,13 @@ def run_query_api_first(bill_name, bill_urls, legislator_filter="", meeting_scop
 
                 if bill_info.get("meeting_dates") and date_query_scopes and not date_query_done:
                     st.write("使用法案頁的會議日期直接查 ID421 API...")
-                    date_result = ly_client.fetch_speeches_by_dates(
+                    date_result = cached_fetch_speeches_by_dates(
                         term,
                         session,
-                        bill_info.get("meeting_dates", []),
-                        bill_keywords=bill_keywords,
-                        meeting_scopes=date_query_scopes,
-                        committee_names=bill_info.get("ivod_committees", []),
+                        tuple(bill_info.get("meeting_dates", [])),
+                        tuple(bill_keywords),
+                        tuple(date_query_scopes),
+                        tuple(bill_info.get("ivod_committees", [])),
                     )
                     date_speeches = date_result.get("speeches", [])
                     added = 0
@@ -305,14 +353,14 @@ def run_query_api_first(bill_name, bill_urls, legislator_filter="", meeting_scop
                     continue
 
                 st.write(f"搜尋第 {term} 屆第 {session} 會期第 {times} 次會議的公報索引 PDF...")
-                pdf_urls = ly_client.fetch_gazette_index_pdfs(term, session, times)
+                pdf_urls = cached_fetch_gazette_index_pdfs(term, session, times)
                 if not pdf_urls:
                     st.write("沒有找到公報索引 PDF。")
                     continue
 
                 session_speakers = set()
                 for pdf_url in pdf_urls:
-                    speakers = ly_client.parse_gazette_pdf_for_speakers(pdf_url, bill_keywords)
+                    speakers = cached_parse_gazette_pdf_for_speakers(pdf_url, tuple(bill_keywords))
                     session_speakers.update(speakers)
 
                 if legislator_filter:
@@ -327,14 +375,14 @@ def run_query_api_first(bill_name, bill_urls, legislator_filter="", meeting_scop
 
                 st.write(f"發言名單：{', '.join(sorted(session_speakers))}")
                 st.write("使用 ID421 API 依會次與委員姓名取得發言 URL...")
-                api_result = ly_client.fetch_speeches_by_session_speakers(
+                api_result = cached_fetch_speeches_by_session_speakers(
                     term,
                     session,
                     times,
-                    session_speakers,
-                    meeting_dates=bill_info.get("meeting_dates", []),
-                    bill_keywords=bill_keywords,
-                    meeting_scopes=plenary_query_scopes,
+                    tuple(sorted(session_speakers)),
+                    tuple(bill_info.get("meeting_dates", [])),
+                    tuple(bill_keywords),
+                    tuple(plenary_query_scopes),
                 )
                 speeches = api_result.get("speeches", [])
                 added = 0
