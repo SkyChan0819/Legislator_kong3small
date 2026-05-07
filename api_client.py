@@ -931,20 +931,7 @@ class LYApiClient:
         if detail_page_urls:
             return detail_page_urls
 
-        index_urls = []
-        for template in templates:
-            for number in range(1, 41):
-                candidate = template.format(num=number)
-                try:
-                    response = self._get(candidate, timeout=(5, 20))
-                    if response.status_code != 200 or not response.content.startswith(b"%PDF"):
-                        continue
-                    if self._pdf_looks_like_speaker_index(response.content):
-                        index_urls.append(candidate)
-                except Exception:
-                    continue
-
-        return list(dict.fromkeys(index_urls))
+        return []
 
     def _fetch_index_pdfs_from_detail_pages(self, detail_pages):
         index_urls = []
