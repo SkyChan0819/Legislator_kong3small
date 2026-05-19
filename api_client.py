@@ -179,6 +179,9 @@ class LYApiClient:
                 "gazette_queries": gazette_queries,
             }
         except Exception as e:
+            fallback = self._parse_bill_page_from_lyapi(ppg_url)
+            if fallback:
+                return fallback
             return {
                 "url": ppg_url,
                 "title": f"解析失敗: {e}",
@@ -1094,3 +1097,67 @@ class LYApiClient:
                 return True
 
         return False
+
+    def _parse_bill_page_from_lyapi(self, ppg_url):
+        bill_match = re.search(r"/bills/(\d+)/details", ppg_url)
+        if not bill_match:
+            return None
+
+        bill_id = bill_match.group(1)
+        try:
+            response = self._get(f"https://v2.ly.govapi.tw/bill/{bill_id}", timeout=(10, 30))
+            response.raise_for_status()
+            payload = response.json()
+            if payload.get("error"):
+                return None
+
+            data = payload.get("data") or {}
+            title = data.get("\u8b70\u6848\u540d\u7a31") or ""
+            flow_items = data.get("\u8b70\u6848\u6d41\u7a0b") or []
+            meeting_dates = []
+            ivod_committees = []
+            ivod_links = []
+            gazette_queries = []
+
+            import urllib.parse
+
+            for item in flow_items:
+                session_text = item.get("\u6703\u671f") or ""
+                session_match = re.search(r"(\d+)-(\d+)-(\d+)", session_text)
+                if session_match:
+                    term, session, times = session_match.groups()
+                    query = {
+                        "term": int(term),
+                        "sessionPeriod": int(session),
+                        "sessionTimes": int(times),
+                    }
+                    if query not in gazette_queries:
+                        gazette_queries.append(query)
+                else:
+                    continue
+
+                scope = item.get("\u9662\u6703/\u59d4\u54e1\u6703") or ""
+                if scope and scope not in ivod_committees:
+                    ivod_committees.append(scope)
+
+                for date_value in item.get("\u65e5\u671f") or []:
+                    if date_value not in meeting_dates:
+                        meeting_dates.append(date_value)
+                    if scope:
+                        ymd = date_value.replace("-", "")
+                        encoded_scope = urllib.parse.quote(scope)
+                        ivod_links.append(
+                            f"https://ivod.ly.gov.tw/Demand/NewsClip?Querydate={ymd}&Committeename={encoded_scope}"
+                        )
+
+            return {
+                "url": ppg_url,
+                "title": title,
+                "ivod_links": list(dict.fromkeys(ivod_links)),
+                "meeting_dates": meeting_dates,
+                "ivod_committees": ivod_committees,
+                "gazette_queries": gazette_queries,
+            }
+        except Exception as e:
+            print(f"LYAPI bill fallback failed: {e}")
+            return None
